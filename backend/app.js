@@ -7,7 +7,7 @@ const path = require('path');
 // Environment variables
 const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
-const KAFKA_BROKER = process.env.KAFKA_BROKER || 'kafka:9092';
+const KAFKA_BROKER = process.env.KAFKA_BROKER || 'gas-smt6.railway.internal:9092';
 
 // Initialize Express
 const app = express();
