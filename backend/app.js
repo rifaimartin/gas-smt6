@@ -86,6 +86,40 @@ const runConsumer = async () => {
 };
 
 // API Routes
+
+// Endpoint untuk membuat topik Kafka
+app.get('/api/create-kafka-topic', async (req, res) => {
+    try {
+      const { Kafka } = require('kafkajs');
+      
+      const kafka = new Kafka({
+        clientId: 'topic-creator',
+        brokers: [process.env.KAFKA_BROKER || 'gas-smt6.railway.internal:9092']
+      });
+      
+      const admin = kafka.admin();
+      await admin.connect();
+      
+      // Buat topik dengan 3 partisi dan faktor replikasi 1
+      await admin.createTopics({
+        topics: [
+          { 
+            topic: 'gas-sensor-readings',
+            numPartitions: 3,
+            replicationFactor: 1
+          }
+        ],
+        waitForLeaders: true
+      });
+      
+      await admin.disconnect();
+      
+      res.status(200).json({ success: true, message: 'Topic created successfully' });
+    } catch (err) {
+      console.error('Error creating Kafka topic:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
 app.get('/api/sensor-data', async (req, res) => {
   try {
     const { limit = 100, from, to } = req.query;
