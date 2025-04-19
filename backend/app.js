@@ -13,7 +13,13 @@ const KAFKA_BROKER = process.env.KAFKA_BROKER || 'kafka:9092';
 const app = express();
 app.use(cors());
 app.use(express.json());
+// Coba menggunakan path absolut
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Dan tambahkan route khusus untuk root path
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 // Connect to MongoDB
 mongoose.connect(MONGODB_URI)
