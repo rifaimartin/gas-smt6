@@ -273,7 +273,7 @@
         }
         
         // Add threshold lines
-        const timestamps = data.map(item => new Date(item.timestamp));
+        const timestamps = data.map(item => new Date(item.received_at));
         const minTime = Math.min(...timestamps.map(d => d.getTime()));
         const maxTime = Math.max(...timestamps.map(d => d.getTime()));
         
@@ -293,7 +293,7 @@
         chart.data.datasets[0].data = data.map(item => {
           // Use received_at as the timestamp since the timestamp field might be incorrectly set
           // This is a workaround for the 1970 timestamp issue
-          const timestamp = new Date(item.received_at || item.timestamp);
+          const timestamp = new Date(item.received_at);
           return {
             x: timestamp,
             y: item.alcohol_ppm
