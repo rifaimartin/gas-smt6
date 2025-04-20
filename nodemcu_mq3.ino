@@ -24,11 +24,24 @@ const float R0 = 10.0; // Nilai R0 dalam kOhm (nilai kalibrasi)
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org");
 
+// Global variables for tracking performance
+int totalScans = 0;
+int successfulTransmissions = 0;
+int failedTransmissions = 0;
+unsigned long totalLatency = 0;
+unsigned long minLatency = 4294967295; // Max value for unsigned long
+unsigned long maxLatency = 0;
+
+// Track failure causes
+int wifiFailures = 0;
+int httpFailures = 0;
+int sensorFailures = 0;
+
 void setup() {
   Serial.begin(115200);
   delay(100);
   
-  Serial.println("\n\n----- MQ-3 Alcohol Gas Sensor Test -----");
+  Serial.println("\n\n----- MQ-3 Alcohol Gas Sensor 1000-Scan Test -----");
   Serial.println("Connecting to WiFi...");
 
   WiFi.begin(ssid, password);
@@ -51,72 +64,240 @@ void setup() {
   Serial.print("Current time: ");
   Serial.println(timeClient.getFormattedTime());
   
-  Serial.println("\nPreparing to read sensor values...");
+  Serial.println("\nStarting 1000-scan test sequence...");
+  Serial.println("This test will perform 1000 sensor readings and transmissions");
+  Serial.println("to evaluate system reliability and performance.");
   Serial.println("------------------------------------------");
   delay(100);
 }
 
 void loop() {
-  // Baca nilai analog dari sensor MQ-3
-  int rawValue = analogRead(sensorPin);
-  
-  // Konversi nilai analog ke tegangan (NodeMCU menggunakan ADC 10-bit: 0-1023)
-  float voltage = rawValue * (3.3 / 1023.0);
-  
-  // Hitung resistansi sensor (Rs)
-  float rs = ((3.3 * 10.0) / voltage) - 10.0; // Asumsi resistor beban 10K
-  
-  // Hitung rasio Rs/R0
-  float ratio = rs / R0;
-  
-  // Konversi ke ppm (parts per million) menggunakan formula dari datasheet MQ-3
-  float ppm = 0.4 * pow(ratio, -0.6);
-  
-  // Tampilkan semua nilai ke serial monitor
-  Serial.println("\n----- Sensor Reading -----");
-  Serial.print("Raw ADC Value: ");
-  Serial.println(rawValue);
-  Serial.print("Voltage: ");
-  Serial.print(voltage, 3);
-  Serial.println(" V");
-  Serial.print("Sensor Resistance (Rs): ");
-  Serial.print(rs, 2);
-  Serial.println(" kOhm");
-  Serial.print("Rs/R0 Ratio: ");
-  Serial.println(ratio, 3);
-  Serial.print("Alcohol Concentration: ");
-  Serial.print(ppm, 2);
-  Serial.println(" ppm");
-  
-  // Interpretasi hasil
-  Serial.print("Status: ");
-  if (ppm < 0.5) {
-    Serial.println("Normal (Safe)");
-  } else if (ppm < 1.0) {
-    Serial.println("Slight Alcohol Detected");
-  } else {
-    Serial.println("Elevated Alcohol Level");
-  }
-  Serial.println("---------------------------");
-  
-  // Kirim data ke backend
-  if (WiFi.status() == WL_CONNECTED) {
-    // Update time from NTP server before sending data
-    timeClient.update();
+  // Only proceed if we haven't reached 1000 scans
+  if (totalScans < 1000) {
+    totalScans++;
+    Serial.print("\n===== Scan #");
+    Serial.print(totalScans);
+    Serial.println(" of 1000 =====");
     
-    Serial.println("Sending data to backend...");
-    sendToBackend(rawValue, voltage, rs, ratio, ppm);
+    // Record start time for latency measurement
+    unsigned long startTime = millis();
+    
+    // Attempt to read sensor
+    int rawValue = 0;
+    float voltage = 0.0;
+    float rs = 0.0;
+    float ratio = 0.0;
+    float ppm = 0.0;
+    
+    // Read sensor and check for failures
+    bool sensorReadSuccess = true;
+    
+    // Baca nilai analog dari sensor MQ-3
+    rawValue = analogRead(sensorPin);
+    
+    // Check for obviously invalid reading (using NodeMCU's 10-bit ADC range)
+    if (rawValue < 0 || rawValue > 1023) {
+      sensorReadSuccess = false;
+      sensorFailures++;
+      Serial.println("SENSOR ERROR: Invalid sensor reading");
+    } else {
+      // Konversi nilai analog ke tegangan (NodeMCU menggunakan ADC 10-bit: 0-1023)
+      voltage = rawValue * (3.3 / 1023.0);
+      
+      // Hitung resistansi sensor (Rs)
+      rs = ((3.3 * 10.0) / voltage) - 10.0; // Asumsi resistor beban 10K
+      
+      // Hitung rasio Rs/R0
+      ratio = rs / R0;
+      
+      // Konversi ke ppm (parts per million) menggunakan formula dari datasheet MQ-3
+      ppm = 0.4 * pow(ratio, -0.6);
+      
+      // Check for reasonable range (basic validation)
+      if (ppm < 0 || ppm > 10.0) {  // Assume above 10.0 ppm is unlikely/error
+        sensorReadSuccess = false;
+        sensorFailures++;
+        Serial.println("SENSOR ERROR: PPM value out of reasonable range");
+      }
+    }
+    
+    if (sensorReadSuccess) {
+      // Tampilkan semua nilai ke serial monitor
+      Serial.println("----- Sensor Reading -----");
+      Serial.print("Raw ADC Value: ");
+      Serial.println(rawValue);
+      Serial.print("Voltage: ");
+      Serial.print(voltage, 3);
+      Serial.println(" V");
+      Serial.print("Sensor Resistance (Rs): ");
+      Serial.print(rs, 2);
+      Serial.println(" kOhm");
+      Serial.print("Rs/R0 Ratio: ");
+      Serial.println(ratio, 3);
+      Serial.print("Alcohol Concentration: ");
+      Serial.print(ppm, 2);
+      Serial.println(" ppm");
+      
+      // Interpretasi hasil
+      Serial.print("Status: ");
+      if (ppm < 0.5) {
+        Serial.println("Normal (Safe)");
+      } else if (ppm < 1.0) {
+        Serial.println("Slight Alcohol Detected");
+      } else {
+        Serial.println("Elevated Alcohol Level");
+      }
+      Serial.println("---------------------------");
+      
+      // Kirim data ke backend
+      if (WiFi.status() == WL_CONNECTED) {
+        // Update time from NTP server before sending data
+        timeClient.update();
+        
+        Serial.println("Sending data to backend...");
+        bool sendSuccess = sendToBackend(rawValue, voltage, rs, ratio, ppm);
+        
+        if (sendSuccess) {
+          successfulTransmissions++;
+          
+          // Calculate and record latency
+          unsigned long latency = millis() - startTime;
+          totalLatency += latency;
+          
+          if (latency < minLatency) minLatency = latency;
+          if (latency > maxLatency) maxLatency = latency;
+          
+          Serial.print("Transmission successful, Total Latency: ");
+          Serial.print(latency);
+          Serial.println("ms");
+        } else {
+          failedTransmissions++;
+          httpFailures++;
+          Serial.println("Transmission failed: HTTP error");
+        }
+      } else {
+        failedTransmissions++;
+        wifiFailures++;
+        Serial.println("Transmission failed: WiFi Disconnected");
+        
+        // Try to reconnect for next attempt
+        Serial.println("Attempting to reconnect WiFi...");
+        WiFi.begin(ssid, password);
+        int reconnectAttempts = 0;
+        while (WiFi.status() != WL_CONNECTED && reconnectAttempts < 10) {
+          delay(500);
+          Serial.print(".");
+          reconnectAttempts++;
+        }
+        if (WiFi.status() == WL_CONNECTED) {
+          Serial.println("\nWiFi reconnected!");
+        } else {
+          Serial.println("\nWiFi reconnection failed");
+        }
+      }
+    } else {
+      // If sensor reading failed, count as failed transmission
+      failedTransmissions++;
+    }
+    
+    // Print stats every 100 scans
+    if (totalScans % 100 == 0 || totalScans == 1) {
+      printStats();
+    }
+    
+    // Wait between readings
+    // Serial.println("\nWaiting 1 seconds before next scan...");
+    // delay(1000);
+  } else if (totalScans == 1000) {
+    // After 1000 scans, display final results
+    Serial.println("\n\n================================================");
+    Serial.println("            TEST SEQUENCE COMPLETED");
+    Serial.println("================================================");
+    printStats();
+    Serial.println("\nFinal Report Details:");
+    Serial.println("------------------------------------------------");
+    Serial.print("WiFi failures: ");
+    Serial.print(wifiFailures);
+    if (failedTransmissions > 0) {
+      Serial.print(" (");
+      Serial.print((float)wifiFailures/failedTransmissions * 100, 1);
+      Serial.println("% of all failures)");
+    } else {
+      Serial.println(" (0% of all failures)");
+    }
+    
+    Serial.print("HTTP request failures: ");
+    Serial.print(httpFailures);
+    if (failedTransmissions > 0) {
+      Serial.print(" (");
+      Serial.print((float)httpFailures/failedTransmissions * 100, 1);
+      Serial.println("% of all failures)");
+    } else {
+      Serial.println(" (0% of all failures)");
+    }
+    
+    Serial.print("Sensor reading failures: ");
+    Serial.print(sensorFailures);
+    if (failedTransmissions > 0) {
+      Serial.print(" (");
+      Serial.print((float)sensorFailures/failedTransmissions * 100, 1);
+      Serial.println("% of all failures)");
+    } else {
+      Serial.println(" (0% of all failures)");
+    }
+    Serial.println("================================================");
+    
+    totalScans++; // Increment so we don't print this again
+    
+    // Flash the built-in LED to indicate completion
+    pinMode(LED_BUILTIN, OUTPUT);
+    for (int i = 0; i < 10; i++) {
+      digitalWrite(LED_BUILTIN, LOW); // LED on
+      delay(200);
+      digitalWrite(LED_BUILTIN, HIGH); // LED off
+      delay(200);
+    }
   } else {
-    Serial.println("WiFi Disconnected");
+    // Just wait in an idle state
+    // delay(1000);
   }
-  
-  // Tunggu beberapa detik sebelum pembacaan berikutnya
-  delay(5000); 
 }
 
-void sendToBackend(int rawValue, float voltage, float rs, float ratio, float ppm) {
+void printStats() {
+  Serial.println("\n----- PERFORMANCE METRICS -----");
+  Serial.print("Scans completed: ");
+  Serial.println(totalScans);
+  Serial.print("Successful transmissions: ");
+  Serial.print(successfulTransmissions);
+  Serial.print(" (");
+  Serial.print((float)successfulTransmissions/totalScans * 100, 1);
+  Serial.println("%)");
+  Serial.print("Failed transmissions: ");
+  Serial.print(failedTransmissions);
+  Serial.print(" (");
+  Serial.print((float)failedTransmissions/totalScans * 100, 1);
+  Serial.println("%)");
+  
+  if (successfulTransmissions > 0) {
+    Serial.print("Average latency: ");
+    Serial.print(totalLatency / successfulTransmissions);
+    Serial.println("ms");
+    Serial.print("Min latency: ");
+    Serial.print(minLatency);
+    Serial.println("ms");
+    Serial.print("Max latency: ");
+    Serial.print(maxLatency);
+    Serial.println("ms");
+  }
+  
+  Serial.println("-------------------------------");
+}
+
+bool sendToBackend(int rawValue, float voltage, float rs, float ratio, float ppm) {
   WiFiClientSecure client;
   client.setInsecure(); // Untuk menyederhanakan koneksi HTTPS, skip verifikasi sertifikat
+  
+  unsigned long sendStartTime = millis();
   
   Serial.print("Connecting to backend on Railways: ");
   Serial.println(backendHost);
@@ -142,6 +323,7 @@ void sendToBackend(int rawValue, float voltage, float rs, float ratio, float ppm
   doc["ratio"] = ratio;
   doc["alcohol_ppm"] = ppm;
   doc["timestamp"] = formattedTime; // Use formatted ISO timestamp string
+  doc["scan_number"] = totalScans; // Add scan number for tracking
 
   String jsonPayload;
   serializeJson(doc, jsonPayload);
@@ -158,10 +340,16 @@ void sendToBackend(int rawValue, float voltage, float rs, float ratio, float ppm
   
   if (https.begin(client, url)) {
     https.addHeader("Content-Type", "application/json");
-    https.setTimeout(15000); // Increase timeout
+    https.setTimeout(5000); // Increase timeout
     
-    // Kirim request
+    // Kirim request dan measure time
+    unsigned long httpStartTime = millis();
     int httpResponseCode = https.POST(jsonPayload);
+    unsigned long httpDuration = millis() - httpStartTime;
+    
+    Serial.print("HTTP request duration: ");
+    Serial.print(httpDuration);
+    Serial.println("ms");
     
     if (httpResponseCode > 0) {
       String response = https.getString();
@@ -169,13 +357,18 @@ void sendToBackend(int rawValue, float voltage, float rs, float ratio, float ppm
       Serial.println(httpResponseCode);
       Serial.print("Response: ");
       Serial.println(response);
+      
+      https.end();
+      return true;
     } else {
       Serial.print("Error code: ");
       Serial.println(httpResponseCode);
+      
+      https.end();
+      return false;
     }
-    
-    https.end();
   } else {
     Serial.println("Unable to connect to backend");
+    return false;
   }
 }
