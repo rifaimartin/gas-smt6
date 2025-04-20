@@ -120,6 +120,12 @@ app.post('/api/sensor-data', async (req, res) => {
     }
   });
 
+  app.post('/api/test', (req, res) => {
+    console.log('Test endpoint hit');
+    console.log('Request body:', req.body);
+    res.status(200).json({ success: true });
+  });
+
 // Endpoint untuk membuat topik Kafka
 app.get('/api/create-kafka-topic', async (req, res) => {
     try {
