@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Gas Sensor Dashboard</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -62,6 +63,17 @@
       justify-content: space-between;
       margin-bottom: 20px;
     }
+    #debug-info {
+      padding: 10px;
+      background-color: #f8f8f8;
+      border: 1px solid #ddd;
+      margin-top: 20px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      display: none;
+    }
   </style>
 </head>
 <body>
@@ -104,15 +116,42 @@
           </select>
         </div>
         <button id="refresh-btn">Refresh Data</button>
+        <button id="toggle-debug">Show Debug</button>
       </div>
       
       <div class="chart-container">
         <canvas id="gas-chart"></canvas>
       </div>
+      
+      <div id="debug-info"></div>
     </div>
   </div>
 
   <script>
+    // Define API URLs
+    const API_BASE_URL = 'https://gas-smt6-production.up.railway.app';
+    
+    // Debug logging function
+    function logDebug(message, data = null) {
+      const debugElement = document.getElementById('debug-info');
+      const timestamp = new Date().toISOString();
+      let logMessage = `${timestamp}: ${message}`;
+      
+      if (data) {
+        try {
+          logMessage += `\n${JSON.stringify(data, null, 2)}`;
+        } catch (e) {
+          logMessage += `\n[Cannot stringify data: ${e.message}]`;
+        }
+      }
+      
+      console.log(message, data);
+      debugElement.textContent += logMessage + '\n\n';
+      
+      // Auto-scroll to bottom
+      debugElement.scrollTop = debugElement.scrollHeight;
+    }
+    
     // Initialize chart
     const ctx = document.getElementById('gas-chart').getContext('2d');
     const chart = new Chart(ctx, {
@@ -123,6 +162,22 @@
           borderColor: 'rgb(75, 192, 192)',
           backgroundColor: 'rgba(75, 192, 192, 0.2)',
           tension: 0.1,
+          data: []
+        },
+        {
+          label: 'Warning Threshold',
+          borderColor: 'orange',
+          borderDash: [5, 5],
+          fill: false,
+          pointRadius: 0,
+          data: []
+        },
+        {
+          label: 'Danger Threshold',
+          borderColor: 'red',
+          borderDash: [5, 5],
+          fill: false,
+          pointRadius: 0,
           data: []
         }]
       },
@@ -173,6 +228,9 @@
     // Function to fetch data
     async function fetchData() {
       try {
+        document.getElementById('status-label').textContent = 'Fetching data...';
+        logDebug('Fetching data started');
+        
         const timeRange = document.getElementById('time-range').value;
         
         // Calculate date range
@@ -192,52 +250,144 @@
             break;
         }
         
-        // Fetch sensor data
-        const response = await fetch(`/api/sensor-data?from=${fromDate.toISOString()}`);
-        const data = await response.json();
+        logDebug(`Using time range: ${timeRange}, fromDate: ${fromDate.toISOString()}`);
         
-        if (data.length === 0) {
-          console.log('No data available');
+        // Fetch sensor data with absolute URL
+        const url = `${API_BASE_URL}/api/sensor-data?from=${fromDate.toISOString()}`;
+        logDebug(`Fetching from: ${url}`);
+        
+        const response = await fetch(url);
+        logDebug(`Response status: ${response.status}`);
+        
+        if (!response.ok) {
+          throw new Error(`API error: ${response.status} ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        logDebug('Received data', data.length > 0 ? data.slice(0, 3) : data);
+        
+        if (!data || data.length === 0) {
+          logDebug('No data available');
+          document.getElementById('status-label').textContent = 'No data available';
           return;
         }
         
-        // Update chart
-        chart.data.datasets[0].data = data.map(item => ({
-          x: new Date(item.timestamp),
-          y: item.alcohol_ppm
-        }));
+        // Add threshold lines
+        const timestamps = data.map(item => new Date(item.timestamp));
+        const minTime = Math.min(...timestamps.map(d => d.getTime()));
+        const maxTime = Math.max(...timestamps.map(d => d.getTime()));
+        
+        // Warning threshold at 0.5 ppm
+        chart.data.datasets[1].data = [
+          { x: new Date(minTime), y: 0.5 },
+          { x: new Date(maxTime), y: 0.5 }
+        ];
+        
+        // Danger threshold at 2.0 ppm
+        chart.data.datasets[2].data = [
+          { x: new Date(minTime), y: 2.0 },
+          { x: new Date(maxTime), y: 2.0 }
+        ];
+        
+        // Update chart data
+        chart.data.datasets[0].data = data.map(item => {
+          // Use received_at as the timestamp since the timestamp field might be incorrectly set
+          // This is a workaround for the 1970 timestamp issue
+          const timestamp = new Date(item.received_at || item.timestamp);
+          return {
+            x: timestamp,
+            y: item.alcohol_ppm
+          };
+        });
+        
+        logDebug('Chart data updated with points', chart.data.datasets[0].data.length);
         chart.update();
         
-        // Update current reading
+        // Update current reading from the most recent data point
+        // Sort by received_at date to get the latest reading
+        data.sort((a, b) => new Date(b.received_at) - new Date(a.received_at));
         const latestReading = data[0].alcohol_ppm;
         updateStatus(latestReading);
         
         // Fetch statistics
-        const statsResponse = await fetch('/api/statistics');
-        const stats = await statsResponse.json();
+        try {
+          const statsUrl = `${API_BASE_URL}/api/statistics`;
+          logDebug(`Fetching statistics from: ${statsUrl}`);
+          
+          const statsResponse = await fetch(statsUrl);
+          logDebug(`Statistics response status: ${statsResponse.status}`);
+          
+          if (!statsResponse.ok) {
+            throw new Error(`API error: ${statsResponse.status}`);
+          }
+          
+          const stats = await statsResponse.json();
+          logDebug('Received statistics', stats);
+          
+          // Update stats display
+          document.getElementById('avg-value').textContent = 
+            (stats.avgPpm || stats.avg || 0).toFixed(2) + ' ppm';
+          document.getElementById('max-value').textContent = 
+            (stats.maxPpm || stats.max || 0).toFixed(2) + ' ppm';
+          document.getElementById('min-value').textContent = 
+            (stats.minPpm || stats.min || 0).toFixed(2) + ' ppm';
+          document.getElementById('count-value').textContent = 
+            stats.count || 0;
+          
+        } catch (statsError) {
+          logDebug('Error fetching statistics', statsError);
+          // Calculate statistics manually from the data we have
+          const ppmValues = data.map(item => item.alcohol_ppm);
+          const avgPpm = ppmValues.reduce((sum, val) => sum + val, 0) / ppmValues.length;
+          const maxPpm = Math.max(...ppmValues);
+          const minPpm = Math.min(...ppmValues);
+          
+          document.getElementById('avg-value').textContent = avgPpm.toFixed(2) + ' ppm';
+          document.getElementById('max-value').textContent = maxPpm.toFixed(2) + ' ppm';
+          document.getElementById('min-value').textContent = minPpm.toFixed(2) + ' ppm';
+          document.getElementById('count-value').textContent = data.length;
+        }
         
-        // Update stats display
-        document.getElementById('avg-value').textContent = stats.avgPpm.toFixed(2) + ' ppm';
-        document.getElementById('max-value').textContent = stats.maxPpm.toFixed(2) + ' ppm';
-        document.getElementById('min-value').textContent = stats.minPpm.toFixed(2) + ' ppm';
-        document.getElementById('count-value').textContent = stats.count;
+        document.getElementById('status-label').textContent = 'Data updated';
         
       } catch (error) {
-        console.error('Error fetching data:', error);
+        logDebug('Error in fetchData', error);
+        document.getElementById('status-label').textContent = 'Error: ' + error.message;
       }
     }
 
     // Initial data fetch
-    fetchData();
-
-    // Set up refresh interval (every 10 seconds)
-    setInterval(fetchData, 10000);
-
-    // Set up manual refresh button
-    document.getElementById('refresh-btn').addEventListener('click', fetchData);
-    
-    // Set up time range change handler
-    document.getElementById('time-range').addEventListener('change', fetchData);
+    document.addEventListener('DOMContentLoaded', () => {
+      logDebug('DOM loaded, starting initial data fetch');
+      fetchData();
+      
+      // Set up refresh interval (every 10 seconds)
+      setInterval(fetchData, 10000);
+      
+      // Set up manual refresh button
+      document.getElementById('refresh-btn').addEventListener('click', () => {
+        logDebug('Manual refresh clicked');
+        fetchData();
+      });
+      
+      // Set up time range change handler
+      document.getElementById('time-range').addEventListener('change', () => {
+        logDebug('Time range changed');
+        fetchData();
+      });
+      
+      // Toggle debug info
+      document.getElementById('toggle-debug').addEventListener('click', () => {
+        const debugElement = document.getElementById('debug-info');
+        if (debugElement.style.display === 'none' || !debugElement.style.display) {
+          debugElement.style.display = 'block';
+          document.getElementById('toggle-debug').textContent = 'Hide Debug';
+        } else {
+          debugElement.style.display = 'none';
+          document.getElementById('toggle-debug').textContent = 'Show Debug';
+        }
+      });
+    });
   </script>
 </body>
 </html>
