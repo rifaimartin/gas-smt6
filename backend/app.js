@@ -87,6 +87,39 @@ const runConsumer = async () => {
 
 // API Routes
 
+app.post('/api/sensor-data', async (req, res) => {
+    try {
+      // Simpan ke MongoDB
+      const sensorData = new SensorData({
+        ...req.body,
+        timestamp: req.body.timestamp ? new Date(parseInt(req.body.timestamp)) : new Date()
+      });
+      await sensorData.save();
+      
+      // Teruskan ke Kafka (jika Kafka aktif)
+      try {
+        const producer = kafka.producer();
+        await producer.connect();
+        await producer.send({
+          topic: 'gas-sensor-readings',
+          messages: [
+            { value: JSON.stringify(req.body) }
+          ]
+        });
+        await producer.disconnect();
+        console.log("Data forwarded to Kafka");
+      } catch (kafkaErr) {
+        console.error("Error sending to Kafka:", kafkaErr);
+        // Lanjutkan meskipun Kafka error
+      }
+      
+      res.status(200).json({ success: true });
+    } catch (err) {
+      console.error("Error processing sensor data:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
 // Endpoint untuk membuat topik Kafka
 app.get('/api/create-kafka-topic', async (req, res) => {
     try {
