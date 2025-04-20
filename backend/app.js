@@ -159,27 +159,27 @@ app.get('/api/create-kafka-topic', async (req, res) => {
       res.status(500).json({ error: err.message });
     }
   });
-app.get('/api/sensor-data', async (req, res) => {
-  try {
-    const { limit = 100, from, to } = req.query;
-    
-    const query = {};
-    if (from || to) {
-      query.timestamp = {};
-      if (from) query.timestamp.$gte = new Date(from);
-      if (to) query.timestamp.$lte = new Date(to);
-    }
-    
-    const data = await SensorData.find(query)
-      .sort({ timestamp: -1 })
-      .limit(parseInt(limit))
-      .exec();
+  app.get('/api/sensor-data', async (req, res) => {
+    try {
+      const { limit = 100, from, to } = req.query;
       
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+      const query = {};
+      if (from || to) {
+        query.received_at = {};
+        if (from) query.received_at.$gte = new Date(from);
+        if (to) query.received_at.$lte = new Date(to);
+      }
+      
+      const data = await SensorData.find(query)
+        .sort({ received_at: -1 })
+        .limit(parseInt(limit))
+        .exec();
+        
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 
 app.get('/api/statistics', async (req, res) => {
   try {
